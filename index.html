@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Redline Reflex</title>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0c2233; --panel:#12324a; --ink:#eaf6ff; --muted:#8fb3c9; --line:#2a5b7c;
+  --sky:#5bd0ff; --gold:#ffd84a; --hot:#ff5a6e; --violet:#b497ff; --mint:#5dffbe; --orange:#ff9a3d;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){ --bg:#0c2233; --panel:#12324a; --ink:#eaf6ff; } }
+:root[data-theme="dark"]{ --bg:#0c2233; --panel:#12324a; --ink:#eaf6ff; }
+html{ scroll-padding-top:env(safe-area-inset-top,0px); }
+html,body{ height:100%; margin:0; background:var(--bg); color:var(--ink); overflow:hidden;
+  font-family:'Chakra Petch','Segoe UI',Roboto,system-ui,sans-serif; -webkit-user-select:none; user-select:none; }
+#wrap{ position:relative; width:100%; height:100%; }
+canvas{ display:block; width:100%; height:100%; cursor:crosshair; touch-action:none; }
+#ov{ position:absolute; inset:0; display:none; align-items:center; justify-content:center; background:rgba(5,14,22,.72); padding:12px; }
+.card{ background:var(--panel); border:2px solid var(--line); border-radius:10px; padding:20px 24px; width:min(540px,94vw);
+  max-height:94%; overflow:auto; text-align:center; box-shadow:0 0 0 4px rgba(12,34,51,.8); }
+.card h1{ margin:0 0 4px; font-size:clamp(28px,6vw,44px); letter-spacing:.02em; line-height:1; }
+.card h1 i{ font-style:normal; color:var(--hot); }
+.card h2{ margin:0 0 10px; font-size:clamp(20px,4vw,28px); }
+.card p{ margin:6px 0; color:var(--muted); font-size:15px; line-height:1.4; }
+.card .tag{ color:var(--sky); }
+.seg{ display:flex; gap:8px; justify-content:center; margin:14px 0; }
+.seg button{ flex:1; }
+button{ font:inherit; font-weight:700; font-size:16px; color:var(--ink); background:#0c2233; border:2px solid var(--line);
+  border-radius:8px; padding:10px 16px; cursor:pointer; }
+button:hover{ border-color:var(--sky); }
+button:focus-visible{ outline:3px solid var(--gold); outline-offset:2px; }
+button.on{ background:var(--sky); color:#06202f; border-color:var(--sky); }
+button.pri{ background:var(--gold); color:#2b2200; border-color:var(--gold); }
+.row{ display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin-top:14px; }
+.legend{ display:grid; grid-template-columns:auto 1fr; gap:6px 10px; text-align:left; font-size:14px; color:var(--muted); margin:10px 0; }
+.legend b{ display:inline-block; width:22px; height:22px; border-radius:50%; border:3px solid; box-sizing:border-box; }
+.stats{ display:grid; grid-template-columns:1fr auto; gap:4px 18px; text-align:left; margin:10px 0; font-size:16px; }
+.stats span:nth-child(odd){ color:var(--muted); }
+.stats span:nth-child(even){ text-align:right; font-weight:700; }
+.grade{ font-size:64px; font-weight:700; line-height:1; margin:6px 0; }
+.hs{ font-size:14px; color:var(--muted); margin-top:10px; }
+@media (prefers-reduced-motion: reduce){ *{ transition:none !important; } }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" aria-label="Redline Reflex game area"></canvas>
+  <div id="ov"></div>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+/* ---------- constants ---------- */
+const COL = { n:'#5bd0ff', g:'#ffd84a', h:'#ff5a6e', k:'#b497ff', S:'#5dffbe', T:'#7aa2ff', b:'#ff9a3d' };
+const BG = '#0c2233', GRID = '#123249';
+const FONT = "'Chakra Petch','Segoe UI',Roboto,system-ui,sans-serif";
+const MAX_LEVEL = 12;
+const DIFFS = {
+  normal:{ name:'Normal', lives:3, speed:1.0,  mul:1 },
+  hard:  { name:'Hard',   lives:2, speed:1.25, mul:1.5 },
+  insane:{ name:'Insane', lives:1, speed:1.55, mul:2.5 }
+};
+const NAMES = ['Warm-Up','Pulse','Hazard Zone','Boss: The Orb','Drift','Keystroke','Overdrive','Boss: The Hive','Static','Redline','Blackout','Boss: The Core'];
+const INTRO = {
+  1:'Tap the blue rings before they close.',
+  2:'New: gold targets close fast and score triple.',
+  3:'New: red hazards (do not tap) and power-ups.',
+  4:'Boss: break the Orb before its timer runs out.',
+  5:'New: targets drift around the screen.',
+  6:'New: purple targets - press the letter on your keyboard.',
+  7:'Everything is faster. Keep your combo alive.',
+  8:'Boss: the Hive is tougher and quicker.',
+  9:'More hazards. Think before you tap.',
+  10:'Redline: almost no time to react.',
+  11:'Blackout: smaller, faster, relentless.',
+  12:'Final boss: the Core.'
+};
+const KEYS = 'ASDFJKLQWERUIOPZXCVM';
+
+/* ---------- state ---------- */
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const ov = document.getElementById('ov');
+let W = 800, H = 500, HH = 56, DPR = 1;
+let state = 'menu';
+let diffKey = 'normal', diff = DIFFS.normal;
+let level = 1, lv = null;
+let score = 0, lives = 3, maxLives = 3, combo = 0, bestCombo = 0;
+let targets = [], parts = [], floats = [];
+let spawnT = 0, readyT = 0, slowT = 0, shield = false;
+let qHits = 0, lvHits = 0, lvMiss = 0, lvExp = 0, lvLost = 0;
+let tHits = 0, tMiss = 0, tExp = 0, rtSum = 0, rtN = 0, bestRT = 0;
+let bossOn = false, shake = 0, flash = 0, flashCol = '#ff5a6e';
+let muted = false, last = 0, primaryFn = null;
+
+/* ---------- audio ---------- */
+let AC = null;
+function ensureAudio(){
+  if(!AC){ try{ AC = new (window.AudioContext || window.webkitAudioContext)(); }catch(e){ AC = null; } }
+  if(AC && AC.state === 'suspended') AC.resume();
+}
+function tone(f, d, type, v, slide){
+  if(muted || !AC) return;
+  try{
+    const o = AC.createOscillator(), g = AC.createGain(), t = AC.currentTime;
+    o.type = type || 'sine';
+    o.frequency.setValueAtTime(f, t);
+    if(slide) o.frequency.exponentialRampToValueAtTime(Math.max(40, f + slide), t + d);
+    g.gain.setValueAtTime(v || .07, t);
+    g.gain.exponentialRampToValueAtTime(.0001, t + d);
+    o.connect(g); g.connect(AC.destination);
+    o.start(t); o.stop(t + d);
+  }catch(e){}
+}
+const sfx = {
+  hit(c){ tone(420 + Math.min(c, 30) * 18, .09, 'triangle', .08); },
+  gold(){ tone(880, .1, 'square', .05); setTimeout(() => tone(1320, .12, 'square', .05), 70); },
+  miss(){ tone(150, .18, 'sawtooth', .06, -60); },
+  hurt(){ tone(220, .35, 'sawtooth', .09, -150); },
+  power(){ tone(520, .08, 'sine', .08); setTimeout(() => tone(780, .14, 'sine', .08), 70); },
+  boss(){ tone(180, .08, 'square', .07); },
+  clear(){ [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => tone(f, .16, 'triangle', .08), i * 110)); },
+  over(){ [330, 262, 196, 130].forEach((f, i) => setTimeout(() => tone(f, .25, 'sawtooth', .08), i * 160)); }
+};
+
+/* ---------- storage ---------- */
+function loadHS(){ try{ return JSON.parse(localStorage.getItem('redline_hs') || '[]'); }catch(e){ return []; } }
+function saveHS(){
+  try{
+    const a = loadHS();
+    a.push({ s:Math.round(score), l:level, d:diff.name });
+    a.sort((x, y) => y.s - x.s);
+    localStorage.setItem('redline_hs', JSON.stringify(a.slice(0, 5)));
+    return a.slice(0, 5);
+  }catch(e){ return []; }
+}
+
+/* ---------- helpers ---------- */
+const fmt = n => Math.round(n).toLocaleString();
+const rnd = (a, b) => a + Math.random() * (b - a);
+const mult = () => Math.min(8, 1 + Math.floor(combo / 5));
+
+function resize(){
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = cv.clientWidth || 800; H = cv.clientHeight || 500;
+  cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  HH = Math.max(50, Math.min(66, H * 0.1));
+}
+window.addEventListener('resize', resize);
+
+/* ---------- overlay ---------- */
+function showOv(html, btns){
+  ov.innerHTML = '<div class="card">' + html + '</div>';
+  const row = document.createElement('div'); row.className = 'row';
+  primaryFn = null;
+  (btns || []).forEach(b => {
+    const el = document.createElement('button');
+    el.textContent = b.label;
+    if(b.primary){ el.className = 'pri'; primaryFn = b.fn; }
+    el.addEventListener('click', () => { ensureAudio(); b.fn(); });
+    row.appendChild(el);
+  });
+  ov.firstChild.appendChild(row);
+  ov.style.display = 'flex';
+  const p = row.querySelector('.pri'); if(p) p.focus({ preventScroll:true });
+}
+function hideOv(){ ov.style.display = 'none'; ov.innerHTML = ''; primaryFn = null; }
+
+function showMenu(){
+  state = 'menu';
+  const hs = loadHS();
+  const hsHtml = hs.length
+    ? '<div class="hs"><b>Best runs</b><br>' + hs.map((h, i) => (i + 1) + '. ' + fmt(h.s) + ' pts - level ' + h.l + ' (' + h.d + ')').join('<br>') + '</div>'
+    : '<div class="hs">No runs yet. Set the first score.</div>';
+  showOv(
+    '<h1>REDLINE <i>REFLEX</i></h1>' +
+    '<p>12 levels, 3 bosses, and no time to think.</p>' +
+    '<div class="seg" id="seg">' +
+      Object.keys(DIFFS).map(k => '<button data-d="' + k + '" class="' + (k === diffKey ? 'on' : '') + '">' + DIFFS[k].name + '</button>').join('') +
+    '</div>' +
+    '<div class="legend">' +
+      '<b style="color:#5bd0ff"></b><span>Tap before the ring closes. Faster taps score more.</span>' +
+      '<b style="color:#ffd84a"></b><span>Gold: closes quickly, triple points.</span>' +
+      '<b style="color:#ff5a6e"></b><span>Red: never tap. It costs a life.</span>' +
+      '<b style="color:#b497ff"></b><span>Purple: press the letter shown.</span>' +
+      '<b style="color:#5dffbe"></b><span>Green shield and blue slow-motion power-ups.</span>' +
+    '</div>' +
+    '<p>Missed rings cost a life. Empty taps break your combo. Pause: P or Esc. Mute: M.</p>' +
+    hsHtml,
+    [{ label:'Start run', primary:true, fn:startGame }]
+  );
+  ov.querySelectorAll('#seg button').forEach(b => b.addEventListener('click', () => {
+    diffKey = b.dataset.d; diff = DIFFS[diffKey];
+    ov.querySelectorAll('#seg button').forEach(x => x.classList.toggle('on', x === b));
+  }));
+}
+
+/* ---------- level config ---------- */
+function levelCfg(n){
+  const ds = diff.speed, boss = n % 4 === 0;
+  return {
+    n, boss,
+    quota: boss ? 8 + n * 2 : 10 + n * 3,
+    spawn: Math.max(.35, 1.15 - n * .07) / ds,
+    life: Math.max(.75, 2.2 - n * .11) / (1 + (ds - 1) * .5),
+    size: Math.max(22, 46 - n * 1.8),
+    maxAlive: Math.min(7, 2 + Math.floor(n / 2)),
+    drift: 70 + n * 14,
+    bossHp: 6 + (n / 4) * 3 + (diffKey === 'insane' ? 3 : 0)
+  };
+}
+
+/* ---------- game flow ---------- */
+function startGame(){
+  ensureAudio(); hideOv();
+  diff = DIFFS[diffKey];
+  score = 0; level = 1; combo = 0; bestCombo = 0;
+  lives = maxLives = diff.lives; shield = false; slowT = 0;
+  tHits = tMiss = tExp = rtSum = rtN = 0; bestRT = 0;
+  beginLevel();
+}
+function beginLevel(){
+  lv = levelCfg(level);
+  targets = []; parts = []; floats = [];
+  qHits = lvHits = lvMiss = lvExp = lvLost = 0;
+  bossOn = false; spawnT = .5; readyT = 2; slowT = 0;
+  hideOv(); state = 'ready';
+}
+function clearLevel(){
+  state = 'clear'; targets = [];
+  const shots = lvHits + lvMiss + lvExp;
+  const acc = shots ? lvHits / shots : 1;
+  const flawless = lvLost === 0;
+  const base = Math.round(500 * level * diff.mul);
+  const accB = Math.round(acc * 500 * diff.mul);
+  const flB = flawless ? Math.round(1000 * diff.mul) : 0;
+  score += base + accB + flB;
+  let grade = 'C';
+  if(acc >= .95 && flawless) grade = 'S'; else if(acc >= .85) grade = 'A'; else if(acc >= .7) grade = 'B';
+  const gc = { S:'#ffd84a', A:'#5dffbe', B:'#5bd0ff', C:'#8fb3c9' }[grade];
+  let heal = '';
+  if(lv.boss && lives < maxLives + 1){ lives++; if(lives > maxLives) maxLives = lives; heal = '<p class="tag">Boss cleared: +1 life</p>'; }
+  sfx.clear();
+  const avg = rtN ? Math.round(rtSum / rtN) + ' ms' : '-';
+  const last = level >= MAX_LEVEL;
+  showOv(
+    '<h2>Level ' + level + ' cleared</h2>' +
+    '<div class="grade" style="color:' + gc + '">' + grade + '</div>' +
+    '<div class="stats">' +
+      '<span>Accuracy</span><span>' + Math.round(acc * 100) + '%</span>' +
+      '<span>Average reaction</span><span>' + avg + '</span>' +
+      '<span>Level bonus</span><span>+' + fmt(base) + '</span>' +
+      '<span>Accuracy bonus</span><span>+' + fmt(accB) + '</span>' +
+      '<span>Flawless bonus</span><span>' + (flawless ? '+' + fmt(flB) : 'none') + '</span>' +
+      '<span>Score</span><span>' + fmt(score) + '</span>' +
+    '</div>' + heal,
+    [{ label: last ? 'Finish run' : 'Next level', primary:true, fn: last ? victory : () => { level++; beginLevel(); } }]
+  );
+}
+function endScreen(title, sub){
+  const hs = saveHS();
+  const avg = rtN ? Math.round(rtSum / rtN) + ' ms' : '-';
+  const shots = tHits + tMiss + tExp;
+  showOv(
+    '<h1>' + title + '</h1><p>' + sub + '</p>' +
+    '<div class="stats">' +
+      '<span>Final score</span><span>' + fmt(score) + '</span>' +
+      '<span>Level reached</span><span>' + level + ' / ' + MAX_LEVEL + '</span>' +
+      '<span>Best combo</span><span>' + bestCombo + '</span>' +
+      '<span>Accuracy</span><span>' + (shots ? Math.round(tHits / shots * 100) : 0) + '%</span>' +
+      '<span>Average reaction</span><span>' + avg + '</span>' +
+      '<span>Fastest reaction</span><span>' + (bestRT ? Math.round(bestRT) + ' ms' : '-') + '</span>' +
+    '</div>' +
+    (hs.length ? '<div class="hs"><b>Best runs</b><br>' + hs.map((h, i) => (i + 1) + '. ' + fmt(h.s) + ' pts - level ' + h.l + ' (' + h.d + ')').join('<br>') + '</div>' : ''),
+    [{ label:'Play again', primary:true, fn:startGame }, { label:'Menu', fn:showMenu }]
+  );
+}
+function gameOver(){ state = 'over'; sfx.over(); endScreen('RUN OVER', 'You went down on level ' + level + ': ' + NAMES[level - 1] + '.'); }
+function victory(){ state = 'over'; endScreen('REDLINE CLEARED', 'All 12 levels done on ' + diff.name + '. That is elite reflexes.'); }
+
+function pause(){
+  if(state !== 'play') return;
+  state = 'paused';
+  showOv('<h2>Paused</h2><p>Score ' + fmt(score) + ' - level ' + level + '</p>',
+    [{ label:'Resume', primary:true, fn:resume }, { label:'Quit to menu', fn:showMenu }]);
+}
+function resume(){ if(state !== 'paused') return; hideOv(); state = 'play'; last = performance.now(); }
+
+/* ---------- spawning ---------- */
+function pickType(){
+  const L = lv.n, bag = [['n', 100]];
+  if(L >= 2) bag.push(['g', 11]);
+  if(L >= 3) bag.push(['h', 14 + Math.min(L, 11) * 2], ['p', 4]);
+  if(L >= 6) bag.push(['k', 15]);
+  if(bossOn) { bag.length = 0; bag.push(['n', 55], ['h', 35], ['g', 10]); }
+  let tot = 0; bag.forEach(b => tot += b[1]);
+  let r = Math.random() * tot;
+  for(const b of bag){ if((r -= b[1]) <= 0) return b[0]; }
+  return 'n';
+}
+function place(t){
+  const m = 10;
+  for(let i = 0; i < 16; i++){
+    const x = rnd(t.r + m, Math.max(t.r + m + 1, W - t.r - m));
+    const y = rnd(HH + t.r + 14, Math.max(HH + t.r + 15, H - t.r - m));
+    if(targets.every(o => Math.hypot(o.x - x, o.y - y) > o.r + t.r + 12)){ t.x = x; t.y = y; return true; }
+  }
+  return false;
+}
+function spawn(){
+  const type = pickType();
+  const t = { type, r:lv.size, age:0, rage:0, life:lv.life, vx:0, vy:0, x:0, y:0 };
+  if(type === 'g'){ t.life = lv.life * .62; t.r = lv.size * .85; }
+  if(type === 'h'){ t.life = lv.life * 1.3; }
+  if(type === 'p'){ t.life = lv.life * 1.8; t.r = lv.size * .9; t.kind = Math.random() < .5 ? 'S' : 'T'; }
+  if(type === 'k'){
+    t.life = lv.life * 1.4; t.r = lv.size * 1.05;
+    const used = targets.filter(o => o.type === 'k').map(o => o.key);
+    const pool = KEYS.split('').filter(c => !used.includes(c));
+    t.key = pool[Math.floor(Math.random() * pool.length)];
+  }
+  if(!place(t)) return false;
+  if(lv.n >= 5 && type !== 'k' && type !== 'p' && Math.random() < .35){
+    const a = rnd(0, Math.PI * 2), s = lv.drift * rnd(.7, 1.2);
+    t.vx = Math.cos(a) * s; t.vy = Math.sin(a) * s;
+  }
+  targets.push(t);
+  return true;
+}
+function spawnBoss(){
+  bossOn = true; targets = [];
+  const a = rnd(0, Math.PI * 2), s = 80 + lv.n * 9;
+  const hp = lv.bossHp;
+  const b = { type:'b', r:62, age:0, rage:0, life:hp * 1.15 + 3, hp, maxHp:hp, vx:Math.cos(a) * s, vy:Math.sin(a) * s, x:W / 2, y:(H + HH) / 2, flash:0, base:s };
+  targets.push(b);
+  floats.push({ x:W / 2, y:H / 2, text:'BOSS INCOMING', color:COL.b, life:1.4, size:34 });
+  sfx.boss();
+}
+
+/* ---------- effects ---------- */
+function burst(x, y, col, n){
+  for(let i = 0; i < n; i++){
+    const a = rnd(0, Math.PI * 2), s = rnd(60, 260);
+    parts.push({ x, y, vx:Math.cos(a) * s, vy:Math.sin(a) * s, life:rnd(.3, .7), max:.7, col });
+  }
+}
+function float(x, y, text, color, size){ floats.push({ x, y, text, color, life:.9, size:size || 20 }); }
+
+/* ---------- gameplay actions ---------- */
+function loseLife(x, y){
+  combo = 0;
+  if(shield){ shield = false; float(x, y, 'SHIELD BLOCKED', COL.S, 20); burst(x, y, COL.S, 18); tone(300, .2, 'sine', .08); return; }
+  lives--; lvLost++; shake = 14; flash = .35; flashCol = '#ff5a6e'; sfx.hurt();
+  if(lives <= 0) gameOver();
+}
+function award(t, base){
+  const rem = Math.max(0, 1 - t.age / t.life);
+  const bonus = Math.round(100 * rem);
+  const pts = Math.round((base + bonus) * mult() * diff.mul);
+  score += pts;
+  return { pts, bonus };
+}
+function hitTarget(t){
+  const i = targets.indexOf(t); if(i < 0) return;
+  const rt = t.rage * 1000;
+  if(t.type === 'b'){
+    t.hp--; t.flash = .12; lvHits++; tHits++; combo++; bestCombo = Math.max(bestCombo, combo);
+    const pts = Math.round(60 * mult() * diff.mul); score += pts;
+    float(t.x, t.y - t.r - 8, '+' + pts, COL.b, 20); burst(t.x, t.y, COL.b, 8); sfx.hit(combo);
+    const sp = t.base * (1 + (1 - t.hp / t.maxHp) * .9), a = Math.atan2(t.vy, t.vx);
+    t.vx = Math.cos(a) * sp; t.vy = Math.sin(a) * sp;
+    if(t.hp <= 0){
+      targets.splice(i, 1);
+      const bp = Math.round(1500 * diff.mul); score += bp;
+      float(t.x, t.y, 'BOSS DOWN +' + fmt(bp), COL.b, 32); burst(t.x, t.y, COL.b, 60); flash = .3; flashCol = '#ffd84a';
+      shake = 16; clearLevel();
+    }
+    return;
+  }
+  targets.splice(i, 1);
+  if(t.type === 'h'){
+    float(t.x, t.y, 'HAZARD', COL.h, 22); burst(t.x, t.y, COL.h, 22);
+    score = Math.max(0, score - 100);
+    loseLife(t.x, t.y); return;
+  }
+  if(t.type === 'p'){
+    if(t.kind === 'S'){ shield = true; float(t.x, t.y, 'SHIELD', COL.S, 22); }
+    else { slowT = 5; float(t.x, t.y, 'SLOW-MO', COL.T, 22); }
+    score += Math.round(50 * diff.mul); burst(t.x, t.y, COL[t.kind], 20); sfx.power(); return;
+  }
+  const base = t.type === 'g' ? 300 : t.type === 'k' ? 150 : 100;
+  combo++; bestCombo = Math.max(bestCombo, combo);
+  const a = award(t, base);
+  qHits++; lvHits++; tHits++; rtSum += rt; rtN++;
+  if(!bestRT || rt < bestRT) bestRT = rt;
+  const label = rt < 250 ? 'LIGHTNING' : rt 
